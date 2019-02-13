@@ -1,0 +1,3 @@
+[submodule "TurtlecoinRpc"]
+	path = TurtlecoinRpc
+	url = https://github.com/jianmingyong/turtlecoin-rpc-csharp.git
