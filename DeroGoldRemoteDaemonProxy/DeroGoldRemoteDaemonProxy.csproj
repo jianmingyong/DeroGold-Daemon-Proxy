@@ -6,7 +6,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\TheDialgaTeam.DependencyInjection\TheDialgaTeam.DependencyInjection.csproj" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\TurtlecoinRpc\TurtlecoinRpc.csproj" />
   </ItemGroup>
 

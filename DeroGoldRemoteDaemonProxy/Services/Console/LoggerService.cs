@@ -1,13 +1,14 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using DeroGoldDaemonProxy.Services.IO;
-using TheDialgaTeam.DependencyInjection;
+using DeroGoldRemoteDaemonProxy.DependencyInjection;
+using DeroGoldRemoteDaemonProxy.Services.IO;
 
-namespace DeroGoldDaemonProxy.Services.Console
+namespace DeroGoldRemoteDaemonProxy.Services.Console
 {
-    public sealed class LoggerService : IInitializableAsync, IErrorLogger, IDisposableAsync
+    public sealed class LoggerService : IInitializable, IDisposable
     {
         private FilePathService FilePathService { get; }
 
@@ -15,38 +16,57 @@ namespace DeroGoldDaemonProxy.Services.Console
 
         private SemaphoreSlim StreamWriterLock { get; set; }
 
+        private ConcurrentQueue<(TextWriter textWriter, ConsoleColor consoleColor, string message)> LoggerQueue { get; set; }
+
+        private bool IsRunning { get; set; }
+
         public LoggerService(FilePathService filePathService)
         {
             FilePathService = filePathService;
         }
 
-        public async Task InitializeAsync()
+        public void Initialize()
         {
             StreamWriter = new StreamWriter(new FileStream(FilePathService.ConsoleLogFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite));
             StreamWriterLock = new SemaphoreSlim(1, 1);
+            LoggerQueue = new ConcurrentQueue<(TextWriter textWriter, ConsoleColor consoleColor, string message)>();
 
-            await LogMessageAsync("==================================================").ConfigureAwait(false);
-            await LogMessageAsync("DeroGold Daemon Proxy (.NET Core)").ConfigureAwait(false);
-            await LogMessageAsync("==================================================").ConfigureAwait(false);
-            await LogMessageAsync("Initializing Application...\n").ConfigureAwait(false);
+            Task.Factory.StartNew(async () =>
+            {
+                IsRunning = true;
+
+                do
+                {
+                    while (LoggerQueue.TryDequeue(out var logger))
+                        await LogMessageAsync(logger.textWriter, logger.consoleColor, logger.message).ConfigureAwait(false);
+
+                    await Task.Delay(1).ConfigureAwait(false);
+                } while (IsRunning);
+
+                IsRunning = false;
+            }, TaskCreationOptions.LongRunning);
         }
 
-        public async Task LogErrorMessageAsync(Exception exception)
+        public void Dispose()
         {
-            await LogMessageAsync(System.Console.Error, ConsoleColor.Red, exception.ToString()).ConfigureAwait(false);
-        }
+            Task.Run(async () =>
+            {
+                while (IsRunning)
+                    await Task.Delay(1).ConfigureAwait(false);
+            }).Wait();
 
-        public Task DisposeAsync()
-        {
             StreamWriter?.Dispose();
             StreamWriterLock?.Dispose();
-
-            return Task.CompletedTask;
         }
 
-        public async Task LogMessageAsync(string message, ConsoleColor consoleColor = ConsoleColor.White)
+        public void LogMessage(string message, ConsoleColor consoleColor = ConsoleColor.White)
         {
-            await LogMessageAsync(System.Console.Out, consoleColor, message).ConfigureAwait(false);
+            LoggerQueue.Enqueue((System.Console.Out, consoleColor, message));
+        }
+
+        public void LogErrorMessage(Exception exception)
+        {
+            LoggerQueue.Enqueue((System.Console.Error, ConsoleColor.Red, exception.ToString()));
         }
 
         private async Task LogMessageAsync(TextWriter writer, ConsoleColor consoleColor, string message)
@@ -54,11 +74,11 @@ namespace DeroGoldDaemonProxy.Services.Console
             if (message == null)
                 return;
 
-            await StreamWriterLock.WaitAsync().ConfigureAwait(false);
-
             try
             {
                 System.Console.ForegroundColor = consoleColor;
+
+                await StreamWriterLock.WaitAsync().ConfigureAwait(false);
 
                 await writer.WriteLineAsync(message).ConfigureAwait(false);
                 await writer.FlushAsync().ConfigureAwait(false);

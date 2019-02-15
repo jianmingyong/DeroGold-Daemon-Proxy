@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 
-namespace TheDialgaTeam.DependencyInjection
+namespace DeroGoldRemoteDaemonProxy.DependencyInjection
 {
     public static class DependencyInjectionExtension
     {

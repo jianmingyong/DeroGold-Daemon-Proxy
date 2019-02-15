@@ -1,11 +1,10 @@
 ﻿using System;
 using System.IO;
-using System.Threading.Tasks;
-using TheDialgaTeam.DependencyInjection;
+using DeroGoldRemoteDaemonProxy.DependencyInjection;
 
-namespace DeroGoldDaemonProxy.Services.IO
+namespace DeroGoldRemoteDaemonProxy.Services.IO
 {
-    public sealed class FilePathService : IInitializableAsync
+    public sealed class FilePathService : IInitializable
     {
         public string ConsoleLogFilePath { get; private set; }
 
@@ -21,7 +20,7 @@ namespace DeroGoldDaemonProxy.Services.IO
             return filePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
         }
 
-        public Task InitializeAsync()
+        public void Initialize()
         {
             ConsoleLogFilePath = ResolveFullPath($"{Environment.CurrentDirectory}/Logs/{DateTime.UtcNow:yyyy-MM-dd}.txt");
             CheckpointsFilePath = ResolveFullPath($"{Environment.CurrentDirectory}/Data/checkpoints.csv");
@@ -31,8 +30,6 @@ namespace DeroGoldDaemonProxy.Services.IO
 
             if (!Directory.Exists(ResolveFullPath($"{Environment.CurrentDirectory}/Data")))
                 Directory.CreateDirectory(ResolveFullPath($"{Environment.CurrentDirectory}/Data"));
-
-            return Task.CompletedTask;
         }
     }
 }

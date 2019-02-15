@@ -7,7 +7,7 @@ using TurtlecoinRpc.Request.Http;
 using TurtlecoinRpc.Response.Json;
 using TurtlecoinRpc.Response.Json.Daemon;
 
-namespace DeroGoldDaemonProxy.Daemon
+namespace DeroGoldRemoteDaemonProxy.Daemon
 {
     public enum DaemonConnectionStatus
     {
@@ -20,24 +20,33 @@ namespace DeroGoldDaemonProxy.Daemon
         Connected = 3
     }
 
-    public enum DaemonReadyStatus
-    {
-        Ready = 0,
-
-        Busy = 1
-    }
-
     public class DaemonProxy : IDisposable
     {
-        public DaemonConnectionStatus ConnectionStatus { get; private set; }
+        public event Action<DaemonProxy, string, ConsoleColor> Log;
 
-        public DaemonReadyStatus ReadyStatus { get; private set; }
+        public string Host { get; }
+
+        public ushort Port { get; }
+
+        public bool IsSynced { get; private set; }
+
+        public bool IsReady { get; private set; }
+
+        public DaemonConnectionStatus ConnectionStatus { get; private set; }
 
         private DaemonRpc DaemonRpc { get; }
 
         public DaemonProxy(string host, ushort port, HttpRpcRequestOptions httpRpcRequestOptions = null)
         {
+            Host = host;
+            Port = port;
             DaemonRpc = new DaemonRpc(host, port, httpRpcRequestOptions);
+        }
+
+        /// <inheritdoc />
+        public void Dispose()
+        {
+            DaemonRpc?.Dispose();
         }
 
         public async Task StartProxyAsync()
@@ -46,19 +55,76 @@ namespace DeroGoldDaemonProxy.Daemon
                 return;
 
             ConnectionStatus = DaemonConnectionStatus.Connecting;
+            IsSynced = false;
+
+            Log?.Invoke(this, "Attempting to connect this remote daemon.", ConsoleColor.White);
 
             try
             {
                 await DaemonRpc.GetInfoAsync().ConfigureAwait(false);
+
+                await Task.Factory.StartNew(async () =>
+                {
+                    var retryCount = 0;
+
+                    do
+                    {
+                        try
+                        {
+                            var info = await GetInfoAsync().ConfigureAwait(false);
+
+                            if (info.Synced)
+                            {
+                                if (!IsSynced)
+                                {
+                                    IsSynced = true;
+                                    Log?.Invoke(this, "This remote daemon is synced and ready to rock!", ConsoleColor.Green);
+                                }
+                            }
+                            else
+                            {
+                                IsSynced = false;
+                                Log?.Invoke(this, $"This remote daemon is syncing with the network. ({Convert.ToDouble(info.Height) / Convert.ToDouble(info.NetworkHeight) * 100:F}% completed) They are {info.NetworkHeight - info.Height} blocks behind. Slow and steady wins the race!", ConsoleColor.Yellow);
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            retryCount++;
+                            IsSynced = false;
+                            Log?.Invoke(this, "Unable to get a response from the daemon. This daemon may be stuck.", ConsoleColor.Yellow);
+                        }
+                        catch (HttpRequestException)
+                        {
+                            retryCount++;
+                            IsSynced = false;
+                            Log?.Invoke(this, "Lost connection to the remote daemon. Retry in 10 seconds.", ConsoleColor.Red);
+                        }
+                        finally
+                        {
+                            await Task.Delay(10000).ConfigureAwait(false);
+                        }
+
+                        if (retryCount < 10)
+                            continue;
+
+                        Log?.Invoke(this, "Retry count exceeded. Disconnecting from this remote daemon.", ConsoleColor.Red);
+                        StopProxy();
+                    } while (ConnectionStatus == DaemonConnectionStatus.Connected);
+                }, TaskCreationOptions.LongRunning).ConfigureAwait(false);
+
                 ConnectionStatus = DaemonConnectionStatus.Connected;
+
+                Log?.Invoke(this, "This remote daemon have been connected!", ConsoleColor.Green);
             }
             catch (OperationCanceledException)
             {
                 ConnectionStatus = DaemonConnectionStatus.Disconnected;
+                Log?.Invoke(this, "Unable to connect to this remote daemon!", ConsoleColor.Red);
             }
             catch (HttpRequestException)
             {
                 ConnectionStatus = DaemonConnectionStatus.Disconnected;
+                Log?.Invoke(this, "Unable to connect to this remote daemon!", ConsoleColor.Red);
             }
         }
 
@@ -68,6 +134,9 @@ namespace DeroGoldDaemonProxy.Daemon
                 return;
 
             ConnectionStatus = DaemonConnectionStatus.Disconnecting;
+
+            Log?.Invoke(this, "This remote daemon have been disconnected.", ConsoleColor.Green);
+
             ConnectionStatus = DaemonConnectionStatus.Disconnected;
         }
 
@@ -81,12 +150,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetHeightAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -100,12 +169,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetInfoAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -120,12 +189,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetTransactionsAsync(transactionsHashes, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -139,12 +208,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetPeersAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -158,12 +227,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetFeeInfoAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -177,12 +246,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlockCountAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -197,12 +266,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlockHashAsync(height, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -218,12 +287,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlockTemplateAsync(reserveSize, walletAddress, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -238,12 +307,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.SubmitBlockAsync(blockBlob, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -255,12 +324,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetLastBlockHeaderAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -275,12 +344,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlockHeaderByHashAsync(hash, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -295,12 +364,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlockHeaderByHeightAsync(height, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -314,12 +383,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetCurrencyIdAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -335,12 +404,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlocksAsync(height, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -356,12 +425,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetBlockAsync(hash, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -377,12 +446,12 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetTransactionAsync(hash, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
         }
 
@@ -397,19 +466,13 @@ namespace DeroGoldDaemonProxy.Daemon
         {
             try
             {
-                ReadyStatus = DaemonReadyStatus.Busy;
+                IsReady = false;
                 return await DaemonRpc.GetTransactionPoolAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ReadyStatus = DaemonReadyStatus.Ready;
+                IsReady = true;
             }
-        }
-
-        /// <inheritdoc />
-        public void Dispose()
-        {
-            DaemonRpc?.Dispose();
         }
     }
 }
