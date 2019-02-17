@@ -14,11 +14,13 @@ namespace DeroGoldRemoteDaemonProxy.Services.Console
 
         private StreamWriter StreamWriter { get; set; }
 
-        private SemaphoreSlim StreamWriterLock { get; set; }
+        private Semaphore StreamWriterLock { get; set; }
 
         private ConcurrentQueue<(TextWriter textWriter, ConsoleColor consoleColor, string message)> LoggerQueue { get; set; }
 
         private bool IsRunning { get; set; }
+
+        private bool ExitRequest { get; set; }
 
         public LoggerService(FilePathService filePathService)
         {
@@ -28,20 +30,23 @@ namespace DeroGoldRemoteDaemonProxy.Services.Console
         public void Initialize()
         {
             StreamWriter = new StreamWriter(new FileStream(FilePathService.ConsoleLogFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite));
-            StreamWriterLock = new SemaphoreSlim(1, 1);
+            StreamWriterLock = new Semaphore(1, 1);
             LoggerQueue = new ConcurrentQueue<(TextWriter textWriter, ConsoleColor consoleColor, string message)>();
 
             Task.Factory.StartNew(async () =>
             {
                 IsRunning = true;
 
-                do
+                while (IsRunning)
                 {
                     while (LoggerQueue.TryDequeue(out var logger))
                         await LogMessageAsync(logger.textWriter, logger.consoleColor, logger.message).ConfigureAwait(false);
 
+                    if (ExitRequest)
+                        break;
+
                     await Task.Delay(1).ConfigureAwait(false);
-                } while (IsRunning);
+                }
 
                 IsRunning = false;
             }, TaskCreationOptions.LongRunning);
@@ -49,6 +54,8 @@ namespace DeroGoldRemoteDaemonProxy.Services.Console
 
         public void Dispose()
         {
+            ExitRequest = true;
+
             Task.Run(async () =>
             {
                 while (IsRunning)
@@ -76,9 +83,9 @@ namespace DeroGoldRemoteDaemonProxy.Services.Console
 
             try
             {
-                System.Console.ForegroundColor = consoleColor;
+                StreamWriterLock.WaitOne();
 
-                await StreamWriterLock.WaitAsync().ConfigureAwait(false);
+                System.Console.ForegroundColor = consoleColor;
 
                 await writer.WriteLineAsync(message).ConfigureAwait(false);
                 await writer.FlushAsync().ConfigureAwait(false);
